@@ -1,0 +1,26 @@
+{
+  "columns": [
+    {"name": "WNV No.", "width": 9.2, "aliases": ["WNV number"]},
+    {"name": "מיקום מבחנה בקופסה", "width": 19.1},
+    {"name": "מזהה מבחנה", "width": 28.2},
+    {"name": "תאריך איסוף", "width": 11.1},
+    {"name": "שם נקודת ניטור", "width": 58.0},
+    {"name": "שם אתר", "width": 13.4},
+    {"name": "רשות שיפוט", "width": 11.0},
+    {"name": "מחוז", "width": 11.5},
+    {"name": "בדיקות נגיף - מין", "width": 16.4},
+    {"name": "בדיקות נגיף - כמות נקבות", "width": 21.9},
+    {"name": "מזהה ביקור", "width": 11.2},
+    {"name": "Point X ITM", "width": 11.1},
+    {"name": "Point Y ITM", "width": 13.0},
+    {"name": "שם דוגם", "width": 11.2},
+    {"name": "מזהה נקודת ניטור", "width": 15.6},
+    {"name": "Sent/ Received at Sheba", "width": 22.9},
+    {"name": "Date mosquitoes homogenized", "width": 29.1},
+    {"name": "Date RNA extracted", "width": 18.6},
+    {"name": "Date of TaqMan", "width": 15.1},
+    {"name": "Result RT-PCR (Lin1+2)", "width": 21.0}
+  ],
+  "freeze_header": true,
+  "min_header_matches": 2
+}

@@ -1,25 +1,26 @@
 """
-סידור עמודות אקסל - ניטור יתושים.
+MosquiOrder - סידור עמודות אקסל לניטור יתושים (ממשק משתמש).
 
-סדר העמודות הנכון (מקובץ Report Run) קבוע בתוך התוכנה.
 בוחרים או גוררים קובץ אחד או יותר, והתוכנה שומרת לצד כל קובץ
 עותק מסודר בשם "<שם הקובץ> - מסודר.xlsx". הקובץ המקורי לא משתנה.
+
+התוכנה: ללא רשת, ללא הרשאות מנהל, ללא כתיבה לרג'יסטרי, ללא קיצורי דרך
+וללא הרצת תהליכים חיצוניים. פתיחת קובץ/תיקייה נעשית רק על פי לחיצת המשתמש.
 """
 
-import os
-import sys
 import math
-import traceback
-from copy import copy
+import os
+import queue
+import sys
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
 try:
-    import openpyxl
-    from openpyxl.utils import get_column_letter
-except ImportError:
+    import core
+except ImportError as e:
     tk.Tk().withdraw()
-    messagebox.showerror("חסרה ספרייה", "יש להתקין את openpyxl:\n\npip install openpyxl")
+    messagebox.showerror("חסרה ספרייה", f"{e}\n\npip install -r requirements.txt")
     raise SystemExit(1)
 
 try:
@@ -28,168 +29,9 @@ try:
 except ImportError:
     HAS_DND = False
 
-
-# ---------------------------------------------------------------- סדר העמודות (מ-Report Run)
-
-COLUMN_ORDER = [
-    ("WNV No.", 9.2),
-    ("מיקום מבחנה בקופסה", 19.1),
-    ("מזהה מבחנה", 28.2),
-    ("תאריך איסוף", 11.1),
-    ("שם נקודת ניטור", 58.0),
-    ("שם אתר", 13.4),
-    ("רשות שיפוט", 11.0),
-    ("מחוז", 11.5),
-    ("בדיקות נגיף - מין", 16.4),
-    ("בדיקות נגיף - כמות נקבות", 21.9),
-    ("מזהה ביקור", 11.2),
-    ("Point X ITM", 11.1),
-    ("Point Y ITM", 13.0),
-    ("שם דוגם", 11.2),
-    ("מזהה נקודת ניטור", 15.6),
-    ("Sent/ Received at Sheba", 22.9),
-    ("Date mosquitoes homogenized", 29.1),
-    ("Date RNA extracted", 18.6),
-    ("Date of TaqMan", 15.1),
-    ("Result RT-PCR (Lin1+2)", 21.0),
-]
-
-HEADER_SCAN_ROWS = 15
-
-# בהרצה כקובץ exe: התיקייה של ה-exe, והאייקון נטען מתוך ה-exe עצמו
 FROZEN = getattr(sys, "frozen", False)
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
 RESOURCE_DIR = getattr(sys, "_MEIPASS", APP_DIR)
-
-
-# ---------------------------------------------------------------- לוגיקה
-
-def norm(value):
-    """מנרמל כותרת להשוואה: מוריד רווחים כפולים ומתעלם מאותיות גדולות/קטנות."""
-    if value is None:
-        return ""
-    return " ".join(str(value).split()).casefold()
-
-
-def find_header_row(ws, template_set):
-    """שורת הכותרות = השורה עם הכי הרבה כותרות שמופיעות בסדר הנכון."""
-    best_row, best_count = None, 0
-    for r in range(1, min(ws.max_row, HEADER_SCAN_ROWS) + 1):
-        count = sum(1 for c in range(1, ws.max_column + 1)
-                    if norm(ws.cell(row=r, column=c).value) in template_set)
-        if count > best_count:
-            best_row, best_count = r, count
-    return best_row, best_count
-
-
-def reorder_sheet(ws):
-    """מסדר את העמודות בגיליון לפי COLUMN_ORDER. מחזיר דוח, או None אם הגיליון לא רלוונטי."""
-    template_set = {norm(h) for h, _ in COLUMN_ORDER}
-    hr, matches = find_header_row(ws, template_set)
-    if hr is None or matches < 2:
-        return None
-
-    max_col, max_row = ws.max_column, ws.max_row
-    src_headers = {c: norm(ws.cell(row=hr, column=c).value) for c in range(1, max_col + 1)}
-
-    # בניית הסדר החדש: (עמודת מקור או None, כותרת לעמודה חסרה, רוחב מהתבנית)
-    used = set()
-    plan, missing = [], []
-    for header, width in COLUMN_ORDER:
-        key = norm(header)
-        src = next((c for c in range(1, max_col + 1)
-                    if c not in used and src_headers[c] == key), None)
-        if src is not None:
-            used.add(src)
-            plan.append((src, None, width))
-        else:
-            plan.append((None, header, width))
-            missing.append(header)
-
-    # עמודות שקיימות בקובץ אבל לא בסדר הנכון - נשמרות בסוף
-    extra = []
-    for c in range(1, max_col + 1):
-        if c in used:
-            continue
-        if any(ws.cell(row=r, column=c).value is not None for r in range(hr, max_row + 1)):
-            plan.append((c, None, None))
-            extra.append(str(ws.cell(row=hr, column=c).value or get_column_letter(c)))
-
-    moved = sum(1 for i, (src, _, _) in enumerate(plan, start=1) if src is not None and src != i)
-
-    # צילום מצב של כל התאים מהכותרת ומטה
-    for rng in list(ws.merged_cells.ranges):
-        if rng.max_row >= hr:
-            ws.unmerge_cells(str(rng))
-
-    snapshot = {}
-    for c in range(1, max_col + 1):
-        snapshot[c] = [(cell.value, copy(cell._style), copy(cell.hyperlink) if cell.hyperlink else None)
-                       for cell in (ws.cell(row=r, column=c) for r in range(hr, max_row + 1))]
-    widths = {c: ws.column_dimensions[get_column_letter(c)].width for c in range(1, max_col + 1)}
-    header_style = copy(ws.cell(row=hr, column=min(used) if used else 1)._style)
-
-    # ניקוי האזור
-    for c in range(1, max(max_col, len(plan)) + 1):
-        for r in range(hr, max_row + 1):
-            cell = ws.cell(row=r, column=c)
-            cell.value = None
-            cell.hyperlink = None
-            cell.style = "Normal"
-
-    # כתיבה בסדר החדש
-    for new_c, (src, new_header, width) in enumerate(plan, start=1):
-        letter = get_column_letter(new_c)
-        if src is not None:
-            for i, (value, style, link) in enumerate(snapshot[src]):
-                cell = ws.cell(row=hr + i, column=new_c)
-                cell.value = value
-                cell._style = copy(style)
-                if link:
-                    cell.hyperlink = link
-            if widths[src]:
-                ws.column_dimensions[letter].width = widths[src]
-        else:
-            cell = ws.cell(row=hr, column=new_c)
-            cell.value = new_header
-            cell._style = copy(header_style)
-            ws.column_dimensions[letter].width = width
-
-    if ws.auto_filter.ref:
-        ws.auto_filter.ref = f"A{hr}:{get_column_letter(len(plan))}{max_row}"
-
-    return {"moved": moved, "missing": missing, "extra": extra}
-
-
-def output_path_for(path):
-    base, ext = os.path.splitext(path)
-    return f"{base} - מסודר{ext}"
-
-
-def process_file(path):
-    """מסדר קובץ אחד ושומר עותק. מחזיר (סטטוס, הודעה)."""
-    wb = openpyxl.load_workbook(path)
-    reports = [r for r in (reorder_sheet(ws) for ws in wb.worksheets) if r]
-    if not reports:
-        return "err", "לא נמצאו כותרות מתאימות בקובץ"
-    wb.save(output_path_for(path))
-
-    moved = sum(r["moved"] for r in reports)
-    missing = [m for r in reports for m in r["missing"]]
-    extra = [e for r in reports for e in r["extra"]]
-    notes = []
-    if missing:
-        notes.append("נוספו ריקות: " + ", ".join(missing))
-    if extra:
-        notes.append("הועברו לסוף: " + ", ".join(extra))
-    if moved == 0 and not missing:
-        msg = "העמודות כבר היו מסודרות"
-    else:
-        msg = f"הוזזו {moved} עמודות למקומן"
-    if notes:
-        return "warn", "\n".join([msg] + notes)
-    return "ok", msg
-
 
 # ---------------------------------------------------------------- עיצוב
 
@@ -241,7 +83,7 @@ class RoundButton(tk.Canvas):
                  parent_bg=BG, font_size=10):
         width, height = px(width), px(height)
         super().__init__(parent, width=width, height=height, bg=parent_bg,
-                         highlightthickness=0, cursor="hand2")
+                         highlightthickness=0, cursor="hand2", takefocus=1)
         if style == "primary":
             self.colors = {"bg": ACCENT, "hover": ACCENT_HOVER, "fg": "white", "outline": ""}
         else:
@@ -254,7 +96,16 @@ class RoundButton(tk.Canvas):
                                       font=(FONT, font_size, "bold"))
         self.bind("<Enter>", lambda e: self.enabled and self.itemconfig(self.shape, fill=self.colors["hover"]))
         self.bind("<Leave>", lambda e: self.enabled and self.itemconfig(self.shape, fill=self.colors["bg"]))
-        self.bind("<Button-1>", lambda e: self.enabled and self.command())
+        self.bind("<Button-1>", lambda e: self._fire())
+        self.bind("<Return>", lambda e: self._fire())
+        self.bind("<space>", lambda e: self._fire())
+
+    def _fire(self):
+        if self.enabled:
+            self.command()
+
+    def set_text(self, text):
+        self.itemconfig(self.label, text=text)
 
     def set_enabled(self, enabled):
         self.enabled = enabled
@@ -276,10 +127,8 @@ def _ellipse(cx, cy, rx, ry, angle=0.0, n=40):
 def mosquito_shapes():
     """יתוש במבט מלמעלה, ביחידות שבהן הגובה הכולל הוא בערך 1 והמרכז ב-(0,0)."""
     shapes = []
-    # כנפיים (מתחת לגוף)
     for s in (-1, 1):
         shapes.append(("poly", _ellipse(s * 0.13, 0.03, 0.065, 0.21, angle=-s * 28), "wing"))
-    # רגליים
     legs = [
         [(0.04, -0.19), (0.17, -0.27), (0.27, -0.42)],
         [(0.05, -0.15), (0.24, -0.13), (0.40, -0.02)],
@@ -289,9 +138,7 @@ def mosquito_shapes():
         for leg in legs:
             shapes.append(("line", [(s * x, y) for x, y in leg], 0.022, "body"))
         shapes.append(("line", [(s * 0.015, -0.31), (s * 0.08, -0.40)], 0.018, "body"))  # מחוש
-    # חדק
-    shapes.append(("line", [(0, -0.30), (0, -0.50)], 0.02, "body"))
-    # גוף
+    shapes.append(("line", [(0, -0.30), (0, -0.50)], 0.02, "body"))      # חדק
     shapes.append(("poly", _ellipse(0, 0.12, 0.045, 0.22), "body"))      # בטן
     shapes.append(("poly", _ellipse(0, -0.16, 0.072, 0.085), "body"))    # חזה
     shapes.append(("poly", _ellipse(0, -0.275, 0.042, 0.042), "body"))   # ראש
@@ -299,7 +146,6 @@ def mosquito_shapes():
 
 
 def draw_mosquito(c, cx, cy, size, body, wing):
-    """מצייר יתוש על Canvas. size = הגובה בפיקסלים."""
     for kind, pts, *rest in mosquito_shapes():
         flat = [v for x, y in pts for v in (cx + x * size, cy + y * size)]
         if kind == "poly":
@@ -310,14 +156,12 @@ def draw_mosquito(c, cx, cy, size, body, wing):
 
 
 def logo(parent, size=34, bg=BG):
-    """לוגו: ריבוע מעוגל בגרדיאנט ועליו יתוש לבן."""
     s = px(size)
     c = tk.Canvas(parent, width=s, height=s, bg=bg, highlightthickness=0)
     for i in range(s):
         c.create_line(i, 0, i, s, fill=hex_mix(ACCENT_2, ACCENT, i / s))
     r = px(9)
     for (x0, y0, start) in ((0, 0, 90), (s - 2 * r, 0, 0), (0, s - 2 * r, 180), (s - 2 * r, s - 2 * r, 270)):
-        # מסכה לפינות: ריבוע בצבע הרקע ועליו רבע עיגול בצבע הגרדיאנט
         cx, cy = x0 + r, y0 + r
         sx = -1 if start in (90, 180) else 1
         sy = -1 if start in (0, 90) else 1
@@ -328,38 +172,10 @@ def logo(parent, size=34, bg=BG):
     return c
 
 
-def create_shortcut(lnk_path, target, args, workdir, icon, description):
-    """יוצר קובץ lnk דרך IShellLinkW (תומך בנתיבים בעברית, בניגוד ל-WScript.Shell)."""
-    import ctypes
-    import uuid
-    from ctypes import c_void_p, c_wchar_p, c_int, POINTER, byref, HRESULT, WINFUNCTYPE
-
-    def guid(s):
-        return (ctypes.c_byte * 16).from_buffer_copy(uuid.UUID(s).bytes_le)
-
-    def call(obj, index, argtypes, *args):
-        vtable = ctypes.cast(obj, POINTER(POINTER(c_void_p))).contents
-        return WINFUNCTYPE(HRESULT, c_void_p, *argtypes)(vtable[index])(obj, *args)
-
-    ole32 = ctypes.windll.ole32
-    ole32.CoInitialize(None)
-    link, persist = c_void_p(), c_void_p()
-    ole32.CoCreateInstance(byref(guid("00021401-0000-0000-C000-000000000046")), None, 1,
-                           byref(guid("000214F9-0000-0000-C000-000000000046")), byref(link))
-    try:
-        call(link, 20, [c_wchar_p], target)               # SetPath
-        call(link, 11, [c_wchar_p], args)                 # SetArguments
-        call(link, 9, [c_wchar_p], workdir)               # SetWorkingDirectory
-        call(link, 17, [c_wchar_p, c_int], icon, 0)       # SetIconLocation
-        call(link, 7, [c_wchar_p], description)           # SetDescription
-        call(link, 0, [c_void_p, POINTER(c_void_p)],      # QueryInterface(IPersistFile)
-             byref(guid("0000010B-0000-0000-C000-000000000046")), byref(persist))
-        call(persist, 6, [c_wchar_p, c_int], lnk_path, 1)  # Save
-    finally:
-        for obj in (persist, link):
-            if obj:
-                vtable = ctypes.cast(obj, POINTER(POINTER(c_void_p))).contents
-                WINFUNCTYPE(ctypes.c_ulong, c_void_p)(vtable[2])(obj)
+def open_path(path):
+    """פותח קובץ/תיקייה שהתוכנה עצמה יצרה, באפליקציית ברירת המחדל. רק בלחיצת משתמש."""
+    if path and os.path.exists(path) and (os.path.isdir(path) or path.lower().endswith(".xlsx")):
+        os.startfile(path)  # nosec B606 - נתיב שנוצר ע"י התוכנה, ללא shell
 
 
 # ---------------------------------------------------------------- ממשק
@@ -372,53 +188,54 @@ class App(BaseTk):
         super().__init__()
         global SCALE
         SCALE = self.winfo_fpixels("1i") / 96
-        self.title("סידור עמודות")
-        w, h = px(640), px(470)
+        self.title(f"סידור עמודות – {core.APP_NAME} {core.APP_VERSION}")
+        w, h = px(660), px(500)
         self.geometry(f"{w}x{h}+{(self.winfo_screenwidth() - w) // 2}+{(self.winfo_screenheight() - h) // 3}")
-        self.minsize(px(560), px(420))
+        self.minsize(px(560), px(440))
         self.configure(bg=BG)
         self._set_icon()
-        self.after(800, self._ensure_shortcut)
 
-        self.files = []      # נתיבים לפי סדר הוספה
-        self.rows = {}       # נתיב -> רכיבי השורה ברשימה
+        self.files = []        # נתיבים לפי סדר הוספה
+        self.rows = {}         # נתיב -> רכיבי השורה ברשימה
+        self.results = {}      # נתיב -> FileResult
         self.popup = None
+        self.busy = False
+        self.events = queue.Queue()
+        self.config_error = None
+        try:
+            self.cfg = core.load_config(APP_DIR)
+        except core.InputError as e:
+            self.cfg, self.config_error = core.default_config(), str(e)
 
         wrap = tk.Frame(self, bg=BG)
         wrap.pack(fill="both", expand=True, padx=px(18), pady=px(14))
         self._build_topbar(wrap)
         self._build_dropzone(wrap)
         self._build_actions(wrap)
+        self._build_progress(wrap)
         self._build_file_list(wrap)
         self._refresh()
         self.bind("<Configure>", lambda e: e.widget is self and self._close_popup(), add="+")
-
-    def _ensure_shortcut(self):
-        """יוצר/מעדכן קיצור דרך עם סמל היתוש ליד התוכנה (מתעדכן גם אחרי העברה למחשב אחר)."""
-        if FROZEN:
-            return  # ל-exe יש אייקון מובנה, אין צורך בקיצור דרך
-        folder = APP_DIR
-        ico = os.path.join(folder, "mosquito.ico")
-        pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-        if os.path.exists(ico) and os.path.exists(pythonw):
-            try:
-                create_shortcut(os.path.join(folder, "סידור עמודות.lnk"), pythonw,
-                                f'"{os.path.abspath(__file__)}"', folder, ico, "סידור עמודות אקסל")
-            except Exception:
-                traceback.print_exc()
+        self.bind("<Escape>", lambda e: self._close_popup())
+        self.bind("<Control-o>", lambda e: self.pick_files())
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        if self.config_error:
+            self.after(300, lambda: messagebox.showwarning(
+                "קובץ הגדרות לא תקין",
+                f"{self.config_error}\n\nהתוכנה תשתמש בסדר העמודות המובנה."))
 
     def _set_icon(self):
-        try:
-            from ctypes import windll
-            windll.shell32.SetCurrentProcessExplicitAppUserModelID("mosquito.column.sorter")
-        except Exception:
-            pass
         ico = os.path.join(RESOURCE_DIR, "mosquito.ico")
         if os.path.exists(ico):
             try:
                 self.iconbitmap(default=ico)
             except tk.TclError:
                 pass
+
+    def _on_close(self):
+        if self.busy and not messagebox.askyesno("עיבוד פעיל", "יש קבצים בעיבוד. לצאת בכל זאת?"):
+            return
+        self.destroy()
 
     # --- שורה עליונה
     def _build_topbar(self, parent):
@@ -429,10 +246,11 @@ class App(BaseTk):
         titles.pack(side="right", padx=px(10))
         tk.Label(titles, text="סידור עמודות", bg=BG, fg=TEXT,
                  font=(FONT, 13, "bold")).pack(anchor="e")
-        tk.Label(titles, text="ניטור יתושים  ·  לפי סדר דוח הריצה", bg=BG, fg=MUTED,
+        src = "" if self.cfg.source == "מובנה" else "  ·  הגדרות מ-columns.json"
+        tk.Label(titles, text=f"ניטור יתושים  ·  גרסה {core.APP_VERSION}{src}", bg=BG, fg=MUTED,
                  font=(FONT, 8)).pack(anchor="e")
-        self.order_btn = RoundButton(bar, "סדר העמודות", self.toggle_order, width=112, height=30,
-                                     style="ghost", font_size=9)
+        self.order_btn = RoundButton(bar, f"סדר העמודות ({len(self.cfg.columns)})", self.toggle_order,
+                                     width=130, height=30, style="ghost", font_size=9)
         self.order_btn.pack(side="left")
 
     # --- חלון קופץ עם סדר העמודות
@@ -450,17 +268,22 @@ class App(BaseTk):
         inner = tk.Frame(pop, bg=SURFACE)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
         tk.Label(inner, text="סדר העמודות הקבוע", bg=SURFACE, fg=TEXT,
-                 font=(FONT, 10, "bold")).pack(anchor="e", padx=px(14), pady=(px(10), px(6)))
+                 font=(FONT, 10, "bold")).pack(anchor="e", padx=px(14), pady=(px(10), px(2)))
+        tk.Label(inner, text=f"מקור: {self.cfg.source}", bg=SURFACE, fg=MUTED,
+                 font=(FONT, 7)).pack(anchor="e", padx=px(14), pady=(0, px(6)))
         grid = tk.Frame(inner, bg=SURFACE)
         grid.pack(padx=px(10), pady=(0, px(10)))
-        half = (len(COLUMN_ORDER) + 1) // 2
-        for i, (name, _) in enumerate(COLUMN_ORDER):
-            col, row = (1, i) if i < half else (0, i - half)   # העמודה הימנית קודם
+        cols = self.cfg.columns
+        per_col = 12
+        ncols = (len(cols) + per_col - 1) // per_col
+        per_col = (len(cols) + ncols - 1) // ncols
+        for i, col in enumerate(cols):
+            gc, gr = ncols - 1 - i // per_col, i % per_col   # הטור הימני קודם
             cell = tk.Frame(grid, bg=SURFACE)
-            cell.grid(row=row, column=col, sticky="e", padx=px(6), pady=px(1))
+            cell.grid(row=gr, column=gc, sticky="e", padx=px(6), pady=px(1))
             tk.Label(cell, text=str(i + 1), bg=ACCENT_SOFT, fg=ACCENT_HOVER, width=3,
                      font=(FONT, 7, "bold")).pack(side="right")
-            tk.Label(cell, text=name, bg=SURFACE, fg=TEXT, font=(FONT, 8)).pack(side="right", padx=(0, px(6)))
+            tk.Label(cell, text=col.name, bg=SURFACE, fg=TEXT, font=(FONT, 8)).pack(side="right", padx=(0, px(6)))
         pop.update_idletasks()
         x = self.order_btn.winfo_rootx()
         y = self.order_btn.winfo_rooty() + self.order_btn.winfo_height() + px(6)
@@ -496,7 +319,6 @@ class App(BaseTk):
         hover = self.drop_hover
         round_rect(c, 1, 1, w - 1, h - 1, px(16), fill=ACCENT_SOFT if hover else SURFACE,
                    outline=ACCENT if hover else BORDER, dash=(5, 4), width=max(1, px(1)))
-        # אייקון העלאה
         cx, cy, r = w - px(46), h / 2, px(20)
         c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=ACCENT if hover else ACCENT_SOFT, outline="")
         col = "white" if hover else ACCENT_HOVER
@@ -505,10 +327,25 @@ class App(BaseTk):
                          cx + px(7.5), cy - px(2), fill=col, outline="")
         c.create_line(cx - px(8), cy + px(10), cx + px(8), cy + px(10), fill=col,
                       width=px(2), capstyle="round")
-        main = "גרור לכאן קבצי אקסל" if HAS_DND else "בחר קבצי אקסל"
+        main = "גרור לכאן קבצי אקסל או תיקייה" if HAS_DND else "בחר קבצי אקסל"
         c.create_text(w - px(80), cy - px(9), text=main, anchor="e", fill=TEXT, font=(FONT, 11, "bold"))
-        sub = "או לחץ לבחירה  ·  אפשר כמה קבצים יחד" if HAS_DND else "לחץ כאן  ·  אפשר כמה קבצים יחד"
+        sub = "או לחץ לבחירה (Ctrl+O)  ·  אפשר כמה קבצים יחד" if HAS_DND else "לחץ כאן (Ctrl+O)  ·  אפשר כמה קבצים יחד"
         c.create_text(w - px(80), cy + px(11), text=sub, anchor="e", fill=MUTED, font=(FONT, 8))
+
+    # --- פס התקדמות
+    def _build_progress(self, parent):
+        self.progress = tk.Canvas(parent, height=px(4), bg=BG, highlightthickness=0)
+        self.progress.pack(side="bottom", fill="x", pady=(px(8), 0))
+
+    def _draw_progress(self, done, total):
+        c = self.progress
+        c.delete("all")
+        if not total:
+            return
+        w = c.winfo_width()
+        c.create_rectangle(0, 0, w, px(4), fill=SURFACE_2, outline="")
+        fill_w = w * done / total
+        c.create_rectangle(w - fill_w, 0, w, px(4), fill=ACCENT, outline="")   # מימין לשמאל
 
     # --- רשימת קבצים
     def _build_file_list(self, parent):
@@ -517,6 +354,8 @@ class App(BaseTk):
         tk.Label(head, text="קבצים", bg=BG, fg=MUTED, font=(FONT, 9, "bold")).pack(side="right")
         self.count_lbl = tk.Label(head, bg=SURFACE_2, fg=TEXT, font=(FONT, 7, "bold"), padx=px(6))
         self.count_lbl.pack(side="right", padx=px(6))
+        self.summary_lbl = tk.Label(head, bg=BG, fg=MUTED, font=(FONT, 8))
+        self.summary_lbl.pack(side="right", padx=px(6))
         self.clear_lbl = tk.Label(head, text="נקה הכל", bg=BG, fg=MUTED, font=(FONT, 8), cursor="hand2")
         self.clear_lbl.pack(side="left")
         self.clear_lbl.bind("<Button-1>", lambda e: self.clear())
@@ -530,7 +369,8 @@ class App(BaseTk):
         self.list_inner.bind("<Configure>", lambda e: self.list_canvas.configure(
             scrollregion=self.list_canvas.bbox("all")))
         self.list_canvas.bind("<Configure>", lambda e: self.list_canvas.itemconfig(win, width=e.width))
-        self.list_canvas.bind_all("<MouseWheel>", self._on_wheel)
+        self.list_canvas.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", self._on_wheel))
+        self.list_canvas.bind("<Leave>", lambda e: self.unbind_all("<MouseWheel>"))
 
         self.empty_lbl = tk.Frame(self.list_inner, bg=BG)
         art = tk.Canvas(self.empty_lbl, width=px(56), height=px(56), bg=BG, highlightthickness=0)
@@ -554,9 +394,10 @@ class App(BaseTk):
 
         texts = tk.Frame(row, bg=SURFACE)
         texts.pack(side="right", fill="x", expand=True, padx=px(10), pady=px(7))
-        tk.Label(texts, text=os.path.basename(path), bg=SURFACE, fg=TEXT,
-                 font=(FONT, 9, "bold"), anchor="e").pack(fill="x")
-        detail = tk.Label(texts, text=os.path.basename(os.path.dirname(path)), bg=SURFACE, fg=MUTED,
+        name = tk.Label(texts, text=os.path.basename(path), bg=SURFACE, fg=TEXT,
+                        font=(FONT, 9, "bold"), anchor="e")
+        name.pack(fill="x")
+        detail = tk.Label(texts, text=os.path.dirname(path), bg=SURFACE, fg=MUTED,
                           font=(FONT, 8), anchor="e", justify="right")
         detail.pack(fill="x")
 
@@ -568,17 +409,26 @@ class App(BaseTk):
         badge = tk.Label(row, font=(FONT, 8, "bold"), padx=px(8), pady=px(1))
         badge.pack(side="left", padx=px(4))
 
+        for w in (row, texts, name, detail, icon):     # לחיצה כפולה פותחת את הקובץ המסודר
+            w.bind("<Double-Button-1>", lambda e: self._open_result(path))
         texts.bind("<Configure>", lambda e: detail.config(wraplength=max(e.width - 4, px(100))))
-        self.rows[path] = {"frame": row, "badge": badge, "detail": detail}
+        self.rows[path] = {"frame": row, "badge": badge, "detail": detail, "name": name}
         self._set_status(path, "wait")
+
+    def _open_result(self, path):
+        res = self.results.get(path)
+        if res and res.output:
+            open_path(res.output)
 
     def _set_status(self, path, status, detail=None):
         text, bg, fg = BADGES[status]
-        r = self.rows[path]
+        r = self.rows.get(path)
+        if not r:
+            return
         r["badge"].config(text=text, bg=bg, fg=fg)
         if detail is not None:
             r["detail"].config(text=detail, fg=fg if status in ("err", "warn") else MUTED)
-        self.update_idletasks()
+        r["name"].config(cursor="hand2" if status in ("ok", "warn") else "")
 
     # --- כפתורים (נבנים לפני הרשימה כדי שיישארו בתחתית)
     def _build_actions(self, parent):
@@ -588,7 +438,7 @@ class App(BaseTk):
         self.run_btn.pack(side="right")
         RoundButton(bar, "פתח תיקייה", self.open_folder, width=104, height=38,
                     style="ghost", font_size=9).pack(side="right", padx=px(8))
-        tk.Label(bar, text='הקובץ המסודר נשמר ליד המקור', bg=BG, fg=FAINT,
+        tk.Label(bar, text="הקובץ המסודר נשמר ליד המקור  ·  לחיצה כפולה פותחת אותו", bg=BG, fg=FAINT,
                  font=(FONT, 8)).pack(side="left")
 
     # --- פעולות
@@ -598,30 +448,54 @@ class App(BaseTk):
         return "copy"
 
     def pick_files(self):
+        if self.busy:
+            return
         start = os.path.dirname(self.files[-1]) if self.files else APP_DIR
         paths = filedialog.askopenfilenames(title="בחר קבצי אקסל לסידור", initialdir=start,
                                             filetypes=[("Excel", "*.xlsx *.xlsm")])
         self.add_files(paths)
 
-    def add_files(self, paths):
+    @staticmethod
+    def _expand(paths):
+        """תיקייה שנגררה = כל קבצי האקסל שבה (לא כולל תתי-תיקיות ופלטים קודמים)."""
         for p in paths:
             p = os.path.normpath(p)
+            if os.path.isdir(p):
+                try:
+                    names = sorted(os.listdir(p))
+                except OSError:
+                    continue
+                for n in names:
+                    if not os.path.splitext(n)[0].endswith(core.OUTPUT_SUFFIX):
+                        yield os.path.join(p, n)
+            else:
+                yield p
+
+    def add_files(self, paths):
+        if self.busy:
+            return
+        for p in self._expand(paths):
             name = os.path.basename(p)
-            if (not p.lower().endswith((".xlsx", ".xlsm")) or name.startswith("~$")
-                    or p in self.files):
+            if (not p.lower().endswith(core.ALLOWED_EXTENSIONS) or name.startswith("~$")
+                    or p in self.files or not os.path.isfile(p)):
                 continue
             self.files.append(p)
             self._add_row(p)
         self._refresh()
 
     def remove(self, path):
+        if self.busy:
+            return
         self.files.remove(path)
+        self.results.pop(path, None)
         self.rows.pop(path)["frame"].destroy()
         self._refresh()
 
     def clear(self):
         for p in list(self.files):
             self.remove(p)
+        self._draw_progress(0, 0)
+        self.summary_lbl.config(text="")
 
     def _refresh(self):
         self.count_lbl.config(text=str(len(self.files)))
@@ -629,44 +503,103 @@ class App(BaseTk):
             self.empty_lbl.pack_forget()
         else:
             self.empty_lbl.pack(pady=px(18))
-        self.run_btn.set_enabled(bool(self.files))
+        self.run_btn.set_enabled(bool(self.files) and not self.busy)
 
     def open_folder(self):
-        folder = os.path.dirname(self.files[-1]) if self.files else APP_DIR
-        os.startfile(folder)
+        open_path(os.path.dirname(self.files[-1]) if self.files else APP_DIR)
 
+    # --- עיבוד ברקע: הממשק לא נתקע גם בקבצים גדולים
     def run(self):
-        self.run_btn.set_enabled(False)
-        ok = 0
-        for path in self.files:
-            self._set_status(path, "run", os.path.basename(os.path.dirname(path)))
-            try:
-                status, msg = process_file(path)
-            except PermissionError:
-                status, msg = "err", "לא ניתן לשמור – סגור את הקובץ המסודר באקסל ונסה שוב"
-            except Exception as e:
-                traceback.print_exc()
-                status, msg = "err", f"שגיאה: {e}"
-            if status != "err":
-                ok += 1
-                msg = f"{msg}\n{os.path.basename(output_path_for(path))}"
-            self._set_status(path, status, msg)
-        self.run_btn.set_enabled(True)
+        if self.busy or not self.files:
+            return
+        self.busy = True
+        self.run_btn.set_text("מעבד…")
+        self._refresh()
+        self.summary_lbl.config(text="")
+        files, cfg = list(self.files), self.cfg
+        for p in files:
+            self._set_status(p, "wait", os.path.dirname(p))
+        self._draw_progress(0, len(files))
 
-        failed = len(self.files) - ok
+        def worker():
+            for i, path in enumerate(files):
+                self.events.put(("start", path, i))
+                self.events.put(("done", path, core.process_file(path, cfg)))
+            self.events.put(("finish", None, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(40, self._poll)
+
+    def _poll(self):
+        try:
+            while True:
+                kind, path, data = self.events.get_nowait()
+                if kind == "start":
+                    self._set_status(path, "run")
+                elif kind == "done":
+                    self.results[path] = data
+                    msg = data.message
+                    if data.output:
+                        msg += f"\n← {os.path.basename(data.output)}"
+                    self._set_status(path, data.status, msg)
+                    self._draw_progress(len(self.results), len(self.files))
+                else:
+                    self._finish()
+                    return
+        except queue.Empty:
+            pass
+        self.after(40, self._poll)
+
+    def _finish(self):
+        self.busy = False
+        self.run_btn.set_text("סדר את הקבצים")
+        self._refresh()
+        res = [self.results[p] for p in self.files if p in self.results]
+        ok = sum(r.status != "err" for r in res)
+        warn = sum(r.status == "warn" for r in res)
+        failed = len(res) - ok
+        parts = [f"{ok} סודרו"] + ([f"{warn} עם הערות"] if warn else []) + ([f"{failed} נכשלו"] if failed else [])
+        self.summary_lbl.config(text="  ·  ".join(parts), fg="#c62828" if failed else MUTED)
         if failed:
             messagebox.showwarning("הסתיים", f"סודרו {ok} קבצים, ונכשלו {failed}.\nפרטים מופיעים ברשימה.")
-        elif len(self.files) == 1:
+        elif len(res) == 1:
             if messagebox.askyesno("הסתיים", "הקובץ סודר ונשמר בהצלחה.\nלפתוח אותו עכשיו?"):
-                os.startfile(output_path_for(self.files[0]))
+                open_path(res[0].output)
         elif messagebox.askyesno("הסתיים", f"כל {ok} הקבצים סודרו בהצלחה.\nלפתוח את התיקייה?"):
             self.open_folder()
 
 
-if __name__ == "__main__":
+def selftest():
+    """בדיקה עצמית ללא ממשק (לאחר בנייה / לצוות IT): קוד יציאה 0 = תקין."""
+    import tempfile
+    import openpyxl
+    names = [c.name for c in core.default_config().columns]
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "selftest.xlsx")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for c, h in enumerate(reversed(names), start=1):
+            ws.cell(row=1, column=c, value=h)
+            ws.cell(row=2, column=c, value=h + "_v")
+        wb.save(src)
+        res = core.process_file(src)
+        out = openpyxl.load_workbook(res.output).active if res.output else None
+        good = (res.status == "ok" and out is not None
+                and [out.cell(row=1, column=c).value for c in range(1, len(names) + 1)] == names
+                and out.cell(row=2, column=1).value == names[0] + "_v")
+    return 0 if good else 1
+
+
+def main():
+    if "--selftest" in sys.argv[1:]:
+        raise SystemExit(selftest())
     try:
         from ctypes import windll
         windll.shcore.SetProcessDpiAwareness(1)  # טקסט חד במסכים ברזולוציה גבוהה
-    except Exception:
+    except (ImportError, AttributeError, OSError):
         pass
     App().mainloop()
+
+
+if __name__ == "__main__":
+    main()
