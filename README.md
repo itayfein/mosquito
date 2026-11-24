@@ -6,7 +6,10 @@
 
 ## שימוש
 
-1. פותחים את התיקייה `MosquiOrder` ומפעילים את `MosquiOrder.exe` (או את `הפעלה.bat` אם Python מותקן).
+1. מפעילים את התוכנה באחת הדרכים:
+   - **גרסה ניידת (קובץ אחד), למחשב רגיל:** מעתיקים את `MosquiOrder-<גרסה>-portable.exe` לכל מקום ומפעילים אותו.
+   - **גרסת תיקייה, למערכת סגורה או להלבנה:** מחלצים את `MosquiOrder-<גרסה>.zip` ומפעילים את `MosquiOrder.exe` מתוך התיקייה. התיקייה `_internal` חייבת להישאר לידו.
+   - **מקוד המקור:** `הפעלה.bat`, אם Python מותקן.
 2. גוררים לחלון קובץ אקסל אחד או יותר, או תיקייה שלמה. אפשר גם ללחוץ על האזור או על Ctrl+O ולבחור קבצים.
 3. לוחצים **סדר את הקבצים**. העיבוד רץ ברקע והממשק לא נתקע.
 4. לחיצה כפולה על שורה ברשימה פותחת את הקובץ המסודר.
@@ -30,7 +33,8 @@
 | `app.py` | ממשק המשתמש (tkinter) |
 | `columns.example.json` | דוגמה לקובץ הגדרות סדר עמודות |
 | `tests/` | בדיקות אוטומטיות (pytest) |
-| `build.ps1`, `mosquiorder.spec`, `version_info.txt` | בנייה |
+| `build.ps1`, `mosquiorder.spec`, `version_info.txt` | בנייה (גרסת תיקייה, להלבנה) |
+| `mosquiorder-portable.spec` | בנייה של הגרסה הניידת (קובץ יחיד) |
 | `SECURITY.md` | דוח בדיקת אבטחה |
 | `טופס הלבנה - סידור עמודות.docx` | טופס ההלבנה המעודכן |
 
@@ -48,7 +52,7 @@ pip install -r requirements-build.txt
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-הסקריפט מריץ בדיקות, bandit ו-pip-audit, בונה את `dist\MosquiOrder\` ומריץ עליו בדיקה עצמית. בסוף הוא מפיק `dist\MosquiOrder-<גרסה>.zip` ו-`dist\SHA256SUMS.txt`. בכל בנייה ה-hash משתנה, וצריך לעדכן אותו בטופס ההלבנה.
+הסקריפט מריץ בדיקות, bandit ו-pip-audit, בונה את `dist\MosquiOrder\` ומריץ עליו בדיקה עצמית. בסוף הוא מפיק את `dist\MosquiOrder-<גרסה>.zip` (להלבנה), את `dist\MosquiOrder-<גרסה>-portable.exe` (קובץ יחיד למחשבים רגילים, שנפרס ל-TEMP ולכן לא מתאים להלבנה) ואת `dist\SHA256SUMS.txt`. בכל בנייה ה-hash משתנה, וצריך לעדכן אותו בטופס ההלבנה.
 
 ## קובץ columns.json
 
