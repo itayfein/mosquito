@@ -25,31 +25,39 @@ if not openpyxl.xml.DEFUSEDXML:  # בלי defusedxml אין הגנה מ-XXE – 
     raise ImportError("defusedxml חייב להיות מותקן (pip install defusedxml)")
 
 APP_NAME = "MosquiOrder"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 # ---------------------------------------------------------------- סדר העמודות (ברירת מחדל, מ-Report Run)
 
 DEFAULT_COLUMNS = [
-    {"name": "WNV No.", "width": 9.2},
     {"name": "מיקום מבחנה בקופסה", "width": 19.1},
+    {"name": "WNV No.", "width": 9.2},
+    {"name": "מזהה ביקור", "width": 11.2},
     {"name": "מזהה מבחנה", "width": 28.2},
-    {"name": "תאריך איסוף", "width": 11.1},
     {"name": "שם נקודת ניטור", "width": 58.0},
     {"name": "שם אתר", "width": 13.4},
     {"name": "רשות שיפוט", "width": 11.0},
+    {"name": "תאריך איסוף", "width": 11.1},
+    {"name": "שם דוגם", "width": 11.2},
     {"name": "מחוז", "width": 11.5},
-    {"name": "בדיקות נגיף - מין", "width": 16.4},
-    {"name": "בדיקות נגיף - כמות נקבות", "width": 21.9},
-    {"name": "מזהה ביקור", "width": 11.2},
     {"name": "Point X ITM", "width": 11.1},
     {"name": "Point Y ITM", "width": 13.0},
-    {"name": "שם דוגם", "width": 11.2},
-    {"name": "מזהה נקודת ניטור", "width": 15.6},
+    {"name": "בדיקות נגיף - מין", "width": 16.4},
+    {"name": "בדיקות נגיף - כמות נקבות", "width": 21.9},
     {"name": "Sent/ Received at Sheba", "width": 22.9},
     {"name": "Date mosquitoes homogenized", "width": 29.1},
     {"name": "Date RNA extracted", "width": 18.6},
     {"name": "Date of TaqMan", "width": 15.1},
     {"name": "Result RT-PCR (Lin1+2)", "width": 21.0},
+    {"name": "TaqMan Ct ENV", "width": 14.0},
+    {"name": "TaqMan Ct NS3", "width": 14.0},
+    {"name": "TaqMan Copies/ml NS3", "width": 20.0},
+    {"name": "TaqMan Ct NS5", "width": 14.0},
+    {"name": "TaqMan Copies/ml NS5", "width": 20.0},
+    {"name": "Result Culture", "width": 14.0},
+    {"name": "Date result out", "width": 15.0},
+    {"name": "Primer & probe sets", "width": 18.0},
+    {"name": "signature", "width": 12.0},
 ]
 
 CONFIG_FILE = "columns.json"
