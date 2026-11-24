@@ -18,18 +18,28 @@ Step "Self-test of exe"  {
     $p = Start-Process -FilePath "dist\MosquiOrder\MosquiOrder.exe" -ArgumentList "--selftest" -Wait -PassThru
     $global:LASTEXITCODE = $p.ExitCode
 }
+# גרסה ניידת (קובץ יחיד) – למחשבים רגילים בלבד, לא להלבנה
+Step "PyInstaller (portable)" { python -m PyInstaller --clean --noconfirm --workpath build\portable mosquiorder-portable.spec }
+Step "Self-test of portable" {
+    $p = Start-Process -FilePath "dist\MosquiOrder-portable.exe" -ArgumentList "--selftest" -Wait -PassThru
+    $global:LASTEXITCODE = $p.ExitCode
+}
 
 $version = (Select-String -Path core.py -Pattern 'APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
 Copy-Item columns.example.json dist\MosquiOrder\ -Force
+$portable = "dist\MosquiOrder-$version-portable.exe"
+Move-Item dist\MosquiOrder-portable.exe $portable -Force
 $zip = "dist\MosquiOrder-$version.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path dist\MosquiOrder -DestinationPath $zip
 
 $exe = Get-FileHash dist\MosquiOrder\MosquiOrder.exe -Algorithm SHA256
 $z = Get-FileHash $zip -Algorithm SHA256
+$pt = Get-FileHash $portable -Algorithm SHA256
 $lines = @(
     "$($exe.Hash.ToLower())  MosquiOrder.exe",
-    "$($z.Hash.ToLower())  MosquiOrder-$version.zip"
+    "$($z.Hash.ToLower())  MosquiOrder-$version.zip",
+    "$($pt.Hash.ToLower())  MosquiOrder-$version-portable.exe   (portable, not for whitelisting)"
 )
 $all = Get-ChildItem dist\MosquiOrder -Recurse -File | Sort-Object FullName | ForEach-Object {
     $h = Get-FileHash $_.FullName -Algorithm SHA256
